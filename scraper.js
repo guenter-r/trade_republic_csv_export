@@ -125,21 +125,25 @@
     const amountRaw = amountEl?.textContent ?? "";
     const canceled = amountEl?.classList?.contains("timelineV2Event__canceled") ? "yes" : "no";
 
+    // NEW: detect “Saving executed” (case‑insensitive, tolerant to extra spaces)
+    const saving = /(saving\s+executed|saveback|round\s+up)/i.test(dateRaw) ? "yes" : "no";
 
     return {
       date: normalizeDate(dateRaw),
       title,
       amount: normalizeAmount(amountRaw),
-      canceled
+      canceled,
+      saving,        // NEW
     };
   }
 
   function toCSV(rows) {
-    const header = ["date", "title", "amount", "canceled"];
+    const header = ["date", "title", "amount", "canceled", "saving/saveback/roundUp"]; // NEW
     return [header.map(csvEscape).join(",")]
       .concat(
         rows.map(r =>
-          [r.date, r.title, r.amount, r.canceled].map(csvEscape).join(",")
+          [r.date, r.title, r.amount, r.canceled, r.saving]  // NEW
+            .map(csvEscape).join(",")
         )
       )
       .join("\n");
