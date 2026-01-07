@@ -52,90 +52,83 @@
     return n.toString();
   }
 
+  // Enhanced collector: returns {type: 'divider'|'event', element, yearContext?}
+  function collectTimelineStructure() {
+    const timelineLis = $$('li.timeline__entry'); // All <li> in order
+    const structure = [];
+    let currentYear = new Date().getFullYear();
 
-  // "15/10" → "YYYY-10-15"
-  function normalizeDate(s) {
+    timelineLis.forEach(li => {
+      if (li.classList.contains('-isMonthDivider') || li.classList.contains('-isNewSection')) {
+        const dividerText = li.querySelector('.timelineMonthDivider')?.textContent?.trim();
+        if (dividerText === 'This month') {
+          currentYear = new Date().getFullYear();
+        } else {
+          // Parse "December 2025" → 2025
+          const yearMatch = dividerText?.match(/\\d{4}$/);
+          currentYear = yearMatch ? parseInt(yearMatch[0], 10) : new Date().getFullYear();
+        }
+        structure.push({ type: 'divider', element: li, yearContext: currentYear });
+      } else {
+        const card = li.querySelector('.timelineV2Event');
+        if (card) {
+          structure.push({ type: 'event', element: li, yearContext: currentYear });
+        }
+      }
+    });
+
+    return structure.filter(item => item.type === 'event'); // Only events
+  }
+
+  // Updated: normalizeDate now takes explicit year
+  function normalizeDate(s, explicitYear) {
     if (!s) return "";
-    s = s.replace(/\u00A0/g, " ").trim(); // collapse &nbsp;
-
+    s = s.replace(/\u00A0/g, " ").trim();
     const pad = (n) => String(n).padStart(2, "0");
-    const now = new Date();
-    const thisYear = now.getFullYear();
 
-    // 1) ISO inside text: YYYY-MM-DD
+    // 1) ISO: YYYY-MM-DD
     let m = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
     if (m) {
       const y = +m[1], mo = +m[2], d = +m[3];
       return `${y}-${pad(mo)}-${pad(d)}`;
     }
 
-    // 2) EU formats inside text: DD/MM[/YY] or DD.MM[.YY]
+    // 2) EU: DD/MM or DD/MM/YY → use explicitYear if no year given
     m = s.match(/\b(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?\b/);
     if (m) {
       let d = +m[1], mo = +m[2];
-      let y = m[3] ? +m[3] : thisYear;
-      if (y < 100) y += 2000; // e.g., 24 -> 2024
-
-      // If year was missing and the date would be in the future, assume it was last year
+      let y = m[3] ? (+m[3] < 100 ? +m[3] + 2000 : +m[3]) : explicitYear;
+      // Future check only if no explicit year
       if (!m[3]) {
         let candidate = new Date(y, mo - 1, d);
-        if (candidate > now) y -= 1;
+        if (candidate > new Date()) y -= 1;
       }
       return `${y}-${pad(mo)}-${pad(d)}`;
     }
 
-    // 3) Fallback: return trimmed original
     return s;
   }
 
-  // Try multiple selectors to be resilient
-  function collectCards() {
-    // Primary (from your snippet)
-    let cards = $$('.timelineV2Event');
-    if (cards.length) return cards;
-
-    // Fallbacks (class name drift)
-    cards = $$('[class*="timelineV2Event"]');
-    if (cards.length) return cards;
-
-    // Very defensive: look for title+subtitle+price pattern near a “timeline” container
-    const timeline = document.querySelector('[data-testid="timeline"], .timeline, [class*="timeline"]') || document;
-    return $$('h2, .title, [class*="title"]', timeline)
-      .map(h => h.closest('div, li, article'))
-      .filter(Boolean)
-      .filter(box =>
-        box.querySelector('h2,[class*="title"]') &&
-        (box.querySelector('p,[class*="subtitle"]')) &&
-        (box.querySelector('.timelineV2Event__price p, .timelineV2Event__price, [class*="price"]'))
-      );
-  }
-
-  function extractRow(card) {
-    const amountEl =
-      card.querySelector('.timelineV2Event__price p') ||
-      card.querySelector('.timelineV2Event__price') ||
-      card.querySelector('[class*="price"] p, [class*="price"]');
-
-    const title = (card.querySelector('.timelineV2Event__title') ||
-      card.querySelector('h2,[class*="title"]'))?.textContent?.trim() ?? "";
-
-    const dateRaw = (card.querySelector('.timelineV2Event__subtitle') ||
-      card.querySelector('p,[class*="subtitle"]'))?.textContent ?? "";
-
+  // Updated extractor uses context
+  function extractRow(structuredItem) {
+    const { element, yearContext } = structuredItem;
+    const card = element.querySelector('.timelineV2Event');
+    const amountEl = card?.querySelector('.timelineV2Event__price p') || card?.querySelector('[class*="price"]');
+    const title = (card?.querySelector('.timelineV2Event__title') || card?.querySelector('h2,[class*="title"]'))?.textContent?.trim() ?? "";
+    const dateRaw = (card?.querySelector('.timelineV2Event__subtitle') || card?.querySelector('p,[class*="subtitle"]'))?.textContent ?? "";
     const amountRaw = amountEl?.textContent ?? "";
     const canceled = amountEl?.classList?.contains("timelineV2Event__canceled") ? "yes" : "no";
-
-    // NEW: detect “Saving executed” (case‑insensitive, tolerant to extra spaces)
     const saving = /(saving\s+executed|saveback|round\s+up)/i.test(dateRaw) ? "yes" : "no";
 
     return {
-      date: normalizeDate(dateRaw),
+      date: normalizeDate(dateRaw, yearContext),
       title,
       amount: normalizeAmount(amountRaw),
       canceled,
-      saving,        // NEW
+      saving
     };
   }
+
 
   function toCSV(rows) {
     const header = ["date", "title", "amount", "canceled", "saving/saveback/roundUp"]; // NEW
@@ -156,13 +149,13 @@
 
     await autoloadAll(container);
 
-    const cards = collectCards();
-    if (!cards.length) {
+    const structure = collectTimelineStructure();
+    if (!structure.length) {
       alert('Broker CSV Exporter: found 0 events. If this page uses a different view, scroll the list first and try again.');
       return;
     }
+    const rows = structure.map(extractRow).filter(r => r.title || r.amount || r.date);
 
-    const rows = cards.map(extractRow).filter(r => r.title || r.amount || r.date);
     if (!rows.length) {
       alert('Broker CSV Exporter: elements found, but no data extracted. The class names may have changed.');
       return;
